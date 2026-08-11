@@ -6,6 +6,15 @@ from scipy.stats import norm
 import ipywidgets as widgets
 from IPython.display import display
 
+
+###
+###
+###
+### Very general plotting functions
+###
+###
+###
+
 def plot_SDE_paths(simulated: SDEOutput, plot_component: str = 'W', num_plot_paths: int = 250, title: str = "Simulated SDE Paths", xlabel: str = "Time", ylabel: str = "Value", theoretical_distribution: callable = None, theoretical_mean: float = None):
     """
     Plot the simulated paths of a stochastic differential equation (SDE).
@@ -103,9 +112,13 @@ def compare_paths(simulated: list[SDEOutput], plot_component: str = 'W', num_plo
     plt.grid()
     plt.show()
 
-##########################
-##########################
-##########################
+###
+###
+###
+### DAY 1
+###
+###
+###
 
 def visually_explore_brownian_motion(generate_brownian_path_handle):
     mu_slider = widgets.FloatSlider(
@@ -781,3 +794,645 @@ def plot_wealth_consumption_policy(generate_deflator_H_handle, market_params: Fi
 
     plt.tight_layout()
     plt.show()
+
+###
+###
+###
+### DAY 2
+###
+###
+###
+
+def explore_continuous_vs_buy_and_hold(simulate_strategy_handle):
+    """Interactively compare continuous rebalancing with buy-and-hold."""
+
+    r_slider = widgets.FloatSlider(
+        value=0.02,
+        min=0.0,
+        max=0.08,
+        step=0.005,
+        description=r"$r$:",
+        continuous_update=False,
+    )
+
+    b_slider = widgets.FloatSlider(
+        value=0.08,
+        min=0.02,
+        max=0.18,
+        step=0.005,
+        description=r"$b$:",
+        continuous_update=False,
+    )
+
+    sigma_slider = widgets.FloatSlider(
+        value=0.30,
+        min=0.15,
+        max=0.60,
+        step=0.01,
+        description=r"$\sigma$:",
+        continuous_update=False,
+    )
+
+    path_slider = widgets.IntSlider(
+        value=0,
+        min=0,
+        max=49,
+        step=1,
+        description="Path:",
+        continuous_update=False,
+    )
+
+    def update_plot(r, b, sigma, path_index):
+        x = 100.0
+        S0 = 100.0
+        T = 5.0
+        horizons = np.array([0.1, 1.0, 5.0])
+
+        market = FinancialMarket(
+            risk_free_rate=r,
+            risk_premium=b - r,
+            volatility=sigma,
+        )
+
+        pi_star = market.risk_premium / market.volatility**2
+
+        if not 0 <= pi_star <= 1:
+            print(
+                rf"The selected parameters give $\pi^\ast={pi_star:.2f}$. "
+                "For this visualization, choose parameters with "
+                rf"$0\leq\pi^\ast\leq1$ so buy-and-hold wealth remains positive."
+            )
+            return
+
+        params = SDESimulationParameters(
+            time_horizon=T,
+            time_steps=int(250 * T),
+            num_paths=2_000,
+            seed=42,
+        )
+
+        out = simulate_strategy_handle(
+            initial_wealth=x,
+            initial_stock_price=S0,
+            market_params=market,
+            sde_params=params,
+        )
+
+        t = out.time_grid
+        X_continuous = out.paths["continuous_rebalancing"]
+        X_buy_hold = out.paths["buy_and_hold"]
+        pi_buy_hold = out.paths["buy_and_hold_fraction"]
+
+        # A separate terminal-only simulation gives precise utility estimates
+        # without storing a very large number of complete paths.
+        utility_runs = 100_000
+        rng = np.random.default_rng(12345)
+        horizon_increments = np.diff(np.concatenate(([0.0], horizons)))
+        terminal_W = np.cumsum(
+            rng.normal(
+                size=(len(horizons), utility_runs),
+                scale=np.sqrt(horizon_increments)[:, np.newaxis],
+            ),
+            axis=0,
+        )
+
+        paired_means = []
+        paired_margins = []
+
+        for horizon, W_horizon in zip(horizons, terminal_W):
+            continuous_terminal = x * np.exp(
+                (
+                    r
+                    + pi_star * market.risk_premium
+                    - 0.5 * pi_star**2 * sigma**2
+                )
+                * horizon
+                + pi_star * sigma * W_horizon
+            )
+            stock_ratio = np.exp(
+                (b - 0.5 * sigma**2) * horizon + sigma * W_horizon
+            )
+            buy_hold_terminal = x * (
+                (1 - pi_star) * np.exp(r * horizon)
+                + pi_star * stock_ratio
+            )
+            paired_difference = (
+                np.log(continuous_terminal) - np.log(buy_hold_terminal)
+            )
+            paired_means.append(np.mean(paired_difference))
+            paired_margins.append(
+                1.96 * np.std(paired_difference) / np.sqrt(utility_runs)
+            )
+
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5.2))
+
+        axes[0].plot(
+            t,
+            X_continuous[:, path_index],
+            color="b",
+            lw=2.2,
+            label="Continuous rebalancing",
+        )
+        axes[0].plot(
+            t,
+            X_buy_hold[:, path_index],
+            color="orange",
+            lw=2.2,
+            label="Buy-and-hold",
+        )
+        for horizon in horizons:
+            axes[0].axvline(horizon, color="grey", lw=0.8, alpha=0.35)
+        axes[0].set_title("Same market path")
+        axes[0].set_xlabel("Time")
+        axes[0].set_ylabel("Wealth")
+        axes[0].grid(alpha=0.25)
+        axes[0].legend()
+
+        axes[1].plot(
+            t,
+            pi_buy_hold[:, path_index],
+            color="orange",
+            lw=2.2,
+            label="Buy-and-hold fraction",
+        )
+        axes[1].axhline(
+            pi_star,
+            color="b",
+            linestyle="--",
+            lw=2.2,
+            label=rf"Target $\pi^\ast={100 * pi_star:.2f}\%$",
+        )
+        axes[1].set_title("The buy-and-hold weight drifts")
+        axes[1].set_xlabel("Time")
+        axes[1].set_ylabel("Fraction invested in stock")
+        axes[1].grid(alpha=0.25)
+        axes[1].legend()
+
+        axes[2].errorbar(
+            np.arange(len(horizons)),
+            paired_means,
+            yerr=paired_margins,
+            fmt="o",
+            color="mediumpurple",
+            ecolor="mediumpurple",
+            capsize=5,
+            markersize=7,
+            label="Paired Monte Carlo mean with 95% CI",
+        )
+        axes[2].axhline(0, color="black", lw=1.0)
+        axes[2].set_xticks(np.arange(len(horizons)))
+        axes[2].set_xticklabels([str(horizon) for horizon in horizons])
+        axes[2].set_title("Expected log-utility advantage")
+        axes[2].set_xlabel("Maturity $T$")
+        axes[2].set_ylabel(
+            r"$\mathbb{E}[\log X_T^{\mathrm{cont}}-\log X_T^{\mathrm{BH}}]$"
+        )
+        axes[2].grid(alpha=0.25)
+        axes[2].legend()
+
+        fig.suptitle(
+            rf"Continuous rebalancing versus buy-and-hold: "
+            rf"$r={r:.3f}$, $b={b:.3f}$, $\sigma={sigma:.2f}$",
+            fontsize=15,
+        )
+        plt.tight_layout()
+        plt.show()
+
+    controls = widgets.VBox(
+        [
+            widgets.HBox([r_slider, b_slider, sigma_slider]),
+            path_slider,
+        ]
+    )
+    interactive_plot = widgets.interactive_output(
+        update_plot,
+        {
+            "r": r_slider,
+            "b": b_slider,
+            "sigma": sigma_slider,
+            "path_index": path_slider,
+        },
+    )
+
+    display(controls, interactive_plot)
+
+
+def explore_cppi_gap_risk(simulate_cppi_handle):
+    """Interactively illustrate discrete-time CPPI gap risk."""
+
+    multiplier_slider = widgets.FloatSlider(
+        value=5.0,
+        min=1.0,
+        max=12.0,
+        step=0.5,
+        description=r"$M$:",
+        continuous_update=False,
+    )
+
+    rebalancing_slider = widgets.SelectionSlider(
+        options=[1, 2, 4, 12, 52, 250],
+        value=12,
+        description="Trades/year:",
+        continuous_update=False,
+    )
+
+    cap_checkbox = widgets.Checkbox(
+        value=False,
+        description="Cap stock position at wealth",
+    )
+
+    def update_plot(multiplier, rebalances, cap_at_wealth):
+        x = 100.0
+        guarantee = 90.0
+        T = 1.0
+        runs = 5_000
+
+        market = FinancialMarket(
+            risk_free_rate=0.02,
+            risk_premium=0.06,
+            volatility=0.25,
+        )
+
+        params = SDESimulationParameters(
+            time_horizon=T,
+            time_steps=int(rebalances * T),
+            num_paths=runs,
+            seed=42,
+        )
+
+        out = simulate_cppi_handle(
+            initial_wealth=x,
+            guarantee=guarantee,
+            multiplier=multiplier,
+            cap_at_wealth=cap_at_wealth,
+            market_params=market,
+            sde_params=params,
+        )
+
+        t = out.time_grid
+        floor = out.paths["floor"]
+        X_continuous = out.paths["continuous_cppi"]
+        X_discrete = out.paths["discrete_cppi"]
+
+        shortfall = X_discrete - floor
+        gap_paths = np.any(shortfall < -1e-10, axis=0)
+        gap_probability = np.mean(gap_paths)
+        stressed_path = int(np.argmin(np.min(shortfall, axis=0)))
+
+        frequencies = np.array([1, 2, 4, 12, 52, 250])
+        gap_probabilities = []
+
+        for frequency in frequencies:
+            frequency_params = SDESimulationParameters(
+                time_horizon=T,
+                time_steps=int(frequency * T),
+                num_paths=runs,
+                seed=42,
+            )
+            frequency_out = simulate_cppi_handle(
+                initial_wealth=x,
+                guarantee=guarantee,
+                multiplier=multiplier,
+                cap_at_wealth=cap_at_wealth,
+                market_params=market,
+                sde_params=frequency_params,
+            )
+            frequency_gap = np.any(
+                frequency_out.paths["discrete_cppi"]
+                < frequency_out.paths["floor"] - 1e-10,
+                axis=0,
+            )
+            gap_probabilities.append(np.mean(frequency_gap))
+
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5.2))
+
+        axes[0].plot(
+            t,
+            floor[:, 0],
+            color="black",
+            linestyle="--",
+            lw=2.0,
+            label="Floor",
+        )
+        axes[0].plot(
+            t,
+            X_continuous[:, stressed_path],
+            color="b",
+            lw=2.2,
+            label="Continuous-time CPPI",
+        )
+        axes[0].plot(
+            t,
+            X_discrete[:, stressed_path],
+            color="orange",
+            marker="o",
+            markersize=3,
+            lw=2.0,
+            label="Discrete CPPI",
+        )
+        axes[0].set_title("Most stressed simulated path")
+        axes[0].set_xlabel("Time")
+        axes[0].set_ylabel("Wealth")
+        axes[0].grid(alpha=0.25)
+        axes[0].legend()
+
+        terminal_values = np.concatenate(
+            [X_continuous[-1, :], X_discrete[-1, :]]
+        )
+        histogram_range = tuple(np.percentile(terminal_values, [0.5, 99.5]))
+
+        axes[1].hist(
+            X_continuous[-1, :],
+            bins=40,
+            range=histogram_range,
+            density=True,
+            alpha=0.45,
+            color="b",
+            label="Continuous-time CPPI",
+        )
+        axes[1].hist(
+            X_discrete[-1, :],
+            bins=40,
+            range=histogram_range,
+            density=True,
+            alpha=0.45,
+            color="orange",
+            label="Discrete CPPI",
+        )
+        axes[1].axvline(guarantee, color="black", linestyle="--", lw=2.0)
+        axes[1].set_title("Terminal wealth distribution (central 99%)")
+        axes[1].set_xlabel(r"$X_T$")
+        axes[1].set_ylabel("Density")
+        axes[1].grid(alpha=0.25)
+        axes[1].legend()
+
+        axes[2].plot(
+            frequencies,
+            gap_probabilities,
+            color="crimson",
+            marker="o",
+            lw=2.2,
+        )
+        axes[2].scatter(
+            [rebalances],
+            [gap_probability],
+            color="black",
+            s=60,
+            zorder=5,
+            label="Selected frequency",
+        )
+        axes[2].set_xscale("log")
+        axes[2].set_xticks(frequencies)
+        axes[2].set_xticklabels([str(value) for value in frequencies])
+        axes[2].yaxis.set_major_formatter(
+            plt.FuncFormatter(lambda value, position: f"{value:.1%}")
+        )
+        axes[2].set_title("Estimated probability of a floor breach")
+        axes[2].set_xlabel("Rebalancings per year")
+        axes[2].set_ylabel("Gap probability")
+        axes[2].grid(alpha=0.25)
+        axes[2].legend()
+
+        cap_text = "with cap" if cap_at_wealth else "without cap"
+        fig.suptitle(
+            rf"CPPI gap risk: $M={multiplier:.1f}$, {cap_text}; "
+            rf"selected gap probability = {gap_probability:.2%}",
+            fontsize=15,
+        )
+        plt.tight_layout()
+        plt.show()
+
+    controls = widgets.VBox(
+        [
+            widgets.HBox([multiplier_slider, rebalancing_slider]),
+            cap_checkbox,
+        ]
+    )
+    interactive_plot = widgets.interactive_output(
+        update_plot,
+        {
+            "multiplier": multiplier_slider,
+            "rebalances": rebalancing_slider,
+            "cap_at_wealth": cap_checkbox,
+        },
+    )
+
+    display(controls, interactive_plot)
+
+
+def explore_log_vs_value_preserving(simulate_strategy_handle):
+    """Compare log-optimal and value-preserving wealth and consumption."""
+
+    r_slider = widgets.FloatSlider(
+        value=0.01,
+        min=0.0,
+        max=0.05,
+        step=0.005,
+        description=r"$r$:",
+        continuous_update=False,
+    )
+
+    b_slider = widgets.FloatSlider(
+        value=0.05,
+        min=0.01,
+        max=0.15,
+        step=0.005,
+        description=r"$b$:",
+        continuous_update=False,
+    )
+
+    sigma_slider = widgets.FloatSlider(
+        value=0.20,
+        min=0.10,
+        max=0.50,
+        step=0.01,
+        description=r"$\sigma$:",
+        continuous_update=False,
+    )
+
+    maturity_slider = widgets.SelectionSlider(
+        options=[1, 5, 10, 20],
+        value=10,
+        description=r"$T$:",
+        continuous_update=False,
+    )
+
+    path_slider = widgets.IntSlider(
+        value=0,
+        min=0,
+        max=49,
+        step=1,
+        description="Path:",
+        continuous_update=False,
+    )
+
+    def exponential_integral(rate, maturity):
+        if np.isclose(rate, 0.0):
+            return maturity
+        return np.expm1(rate * maturity) / rate
+
+    def update_plot(r, b, sigma, maturity, path_index):
+        x = 100.0
+        T = float(maturity)
+
+        market = FinancialMarket(
+            risk_free_rate=r,
+            risk_premium=b - r,
+            volatility=sigma,
+        )
+        params = SDESimulationParameters(
+            time_horizon=T,
+            time_steps=int(100 * T),
+            num_paths=1_500,
+            seed=42,
+        )
+
+        out = simulate_strategy_handle(
+            initial_wealth=x,
+            market_params=market,
+            sde_params=params,
+        )
+
+        t = out.time_grid
+        X_log = out.paths["log_wealth"]
+        C_log = out.paths["log_cumulative_consumption"]
+        X_vps = out.paths["vps_wealth"]
+        C_vps = out.paths["vps_cumulative_consumption"]
+
+        theta = market.risk_premium / market.volatility
+        growth_rate = r + theta**2
+
+        analytical_log = np.array(
+            [
+                x * np.exp(growth_rate * T) / (T + 1),
+                x * exponential_integral(growth_rate, T) / (T + 1),
+            ]
+        )
+        analytical_vps = np.array(
+            [
+                x * np.exp(r * T),
+                x * theta**2 * exponential_integral(r, T),
+            ]
+        )
+
+        monte_carlo_log = np.array(
+            [np.mean(X_log[-1, :]), np.mean(C_log[-1, :])]
+        )
+        monte_carlo_vps = np.array(
+            [np.mean(X_vps[-1, :]), np.mean(C_vps[-1, :])]
+        )
+
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5.2))
+
+        axes[0].plot(
+            t,
+            X_log[:, path_index],
+            color="b",
+            lw=2.2,
+            label="Log-optimal wealth",
+        )
+        axes[0].plot(
+            t,
+            X_vps[:, path_index],
+            color="orange",
+            linestyle="--",
+            lw=2.2,
+            label="Value-preserving wealth",
+        )
+        axes[0].set_title("Wealth on the same market path")
+        axes[0].set_xlabel("Time")
+        axes[0].set_ylabel("Wealth")
+        axes[0].grid(alpha=0.25)
+        axes[0].legend()
+
+        axes[1].plot(
+            t,
+            C_log[:, path_index],
+            color="b",
+            lw=2.2,
+            label="Log-optimal consumption",
+        )
+        axes[1].plot(
+            t,
+            C_vps[:, path_index],
+            color="orange",
+            linestyle="--",
+            lw=2.2,
+            label="Value-preserving consumption",
+        )
+        axes[1].axhline(0, color="black", lw=0.8)
+        axes[1].set_title("Cumulative consumption")
+        axes[1].set_xlabel("Time")
+        axes[1].set_ylabel("Cumulative amount")
+        axes[1].grid(alpha=0.25)
+        axes[1].legend()
+
+        locations = np.arange(2)
+        width = 0.34
+        axes[2].bar(
+            locations - width / 2,
+            monte_carlo_log,
+            width,
+            color="b",
+            alpha=0.70,
+            label="Log-optimal MC mean",
+        )
+        axes[2].bar(
+            locations + width / 2,
+            monte_carlo_vps,
+            width,
+            color="orange",
+            alpha=0.70,
+            label="Value-preserving MC mean",
+        )
+        axes[2].scatter(
+            locations - width / 2,
+            analytical_log,
+            marker="_",
+            s=900,
+            linewidths=3,
+            color="black",
+            label="Analytical mean",
+        )
+        axes[2].scatter(
+            locations + width / 2,
+            analytical_vps,
+            marker="_",
+            s=900,
+            linewidths=3,
+            color="black",
+        )
+        axes[2].set_xticks(locations)
+        axes[2].set_xticklabels(["Terminal wealth", "Consumption"])
+        axes[2].set_title("Expected allocation by maturity")
+        axes[2].set_ylabel("Expected amount")
+        axes[2].grid(axis="y", alpha=0.25)
+        axes[2].legend(fontsize=9)
+
+        pi_star = market.risk_premium / market.volatility**2
+        fig.suptitle(
+            rf"Log-optimal versus value-preserving: $T={T:g}$, "
+            rf"$\pi^\ast={100 * pi_star:.2f}\%$",
+            fontsize=15,
+        )
+        plt.tight_layout()
+        plt.show()
+
+    controls = widgets.VBox(
+        [
+            widgets.HBox([r_slider, b_slider, sigma_slider]),
+            widgets.HBox([maturity_slider, path_slider]),
+        ]
+    )
+    interactive_plot = widgets.interactive_output(
+        update_plot,
+        {
+            "r": r_slider,
+            "b": b_slider,
+            "sigma": sigma_slider,
+            "maturity": maturity_slider,
+            "path_index": path_slider,
+        },
+    )
+
+    display(controls, interactive_plot)
