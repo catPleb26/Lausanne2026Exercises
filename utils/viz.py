@@ -1,360 +1,10 @@
+from .common import *
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
-from dataclasses import dataclass
-from enum import Enum
+from scipy.stats import norm
 
-#########################
-### CLASS DEFINITIONS ###
-#########################
-@dataclass(frozen=True)
-class FinancialMarket:
-    """
-    A dataclass representing a financial market in the Black-Scholes model.
-
-    Attributes:
-    -----------
-        risk_free_rate (float): The risk-free interest rate (r). [Default: 0.025]
-        risk_premium (float): The risk premium (mu - r). [Default: 0.05]
-        volatility (float): The volatility of the underlying asset (sigma). [Default: 0.25]
-
-    Properties:
-        drift (float): The drift of the underlying asset, calculated as 'risk_free_rate' + 'risk_premium'.
-    """
-    risk_free_rate: float = 0.025
-    risk_premium: float   = 0.05
-    volatility: float     = 0.25
-
-    def __post_init__(self):
-        # Parameter validation
-        if self.volatility < 0:
-            raise ValueError("Volatility must be non-negative.")
-
-    @property
-    def drift(self):
-        """
-        Calculate the drift of the underlying asset.
-
-        Returns:
-            float: The drift, calculated as 'risk_free_rate' + 'risk_premium'.
-        """
-        return self.risk_free_rate + self.risk_premium
-
-
-@dataclass(frozen=True)
-class SDESimulationParameters:
-    """
-    A dataclass representing the parameters for simulating a stochastic differential equation (SDE).
-
-    Attributes:
-    -----------
-        time_horizon (float): The total time horizon for the simulation. [Default: 1.0]
-        time_steps (int): The number of discrete time steps in the simulation. [Default: 250]
-        num_paths (int): The number of simulation paths to generate. [Default: 1_000]
-        seed (int): The random seed for reproducibility. [Default: 42]
-
-    Properties:
-    -----------
-        dt (float): The time increment (dt) calculated as 'time_horizon' / 'time_steps'
-    """
-    time_horizon: float = 1.0
-    time_steps: int     = 250
-    num_paths: int      = 1_000
-    seed: int           = 42
-
-    def __post_init__(self):
-        # Parameter validation
-        if self.time_horizon <= 0:
-            raise ValueError("Time horizon must be positive.")
-        if self.time_steps <= 0:
-            raise ValueError("Number of time steps must be positive.")
-        if self.num_paths <= 0:
-            raise ValueError("Number of paths must be positive.")
-
-    @property
-    def dt(self):
-        """
-        Calculate the time increment (dt) based on the time horizon and number of time steps.
-
-        Returns:
-            float: The time increment (dt).
-        """
-        return self.time_horizon / self.time_steps
-
-
-@dataclass(frozen=True)
-class SDEOutput:
-    """
-    A dataclass representing the output of a stochastic differential equation (SDE) simulation.
-
-    Attributes:
-    -----------
-        time_grid (np.ndarray): The time grid used in the simulation.
-        paths (dict[str, np.ndarray]): The simulated paths of the SDE. Each key in the dictionary corresponds to a different component of the trajectory, and the values are numpy arrays representing the simulated paths for that component.
-
-    Properties:
-    -----------
-        quadratic_variation (np.ndarray): The quadratic variation of the simulated paths.
-    """
-    time_grid: np.ndarray
-    paths: dict[str, np.ndarray]
-
-    @property
-    def quadratic_variation(self):
-        """
-        Calculate the quadratic variation of the simulated paths.
-
-        Returns:
-            np.ndarray: The quadratic variation of the paths.
-        """
-        return {key: np.cumsum(np.diff(value, axis=0) ** 2, axis=0) for key, value in self.paths.items()}
-
-
-@dataclass(frozen=True)
-class TestStatistics:
-    """
-    A dataclass representing the statistics of a test.
-
-    Attributes:
-    -----------
-        mean (np.ndarray): The mean of the test results.
-        std_dev (np.ndarray): The standard deviation of the test results.
-        min_value (np.ndarray): The minimum value of the test results.
-        max_value (np.ndarray): The maximum value of the test results.
-        drange (np.ndarray): The range of the test results, calculated as 'max_value' - 'min_value'.
-        quantiles (dict): A dictionary containing the quantiles of the test results. (5%, 25%, 50%, 75%, 95%)
-    """
-    mean: np.ndarray
-    std_dev: np.ndarray
-    min_value: np.ndarray
-    max_value: np.ndarray
-    drange: np.ndarray
-    quantiles: dict
-
-    def __str__(self):
-        """
-        Return a string representation of the TestStatistics object.
-        Only implemented for scalar statistics (i.e., when the attributes are not arrays).
-
-        Returns:
-            str: A formatted string containing the statistics.
-        """
-        if not all(isinstance(attr, (int, float, np.float64)) for attr in [self.mean, self.std_dev, self.min_value, self.max_value, self.drange]):
-            raise ValueError("String representation is only implemented for scalar statistics.")
-
-        quantiles_str = '|'.join([f"{k}: {v:.6f}" for k, v in self.quantiles.items()])
-        return (f"Mean ± StdDev: {self.mean:.6f} ± {self.std_dev:.6f},\n"
-                f"(Min) {self.min_value:.6f} <-- {self.drange:.6f} --> {self.max_value:.6f} (Max)\n"
-                f"Quantiles: \n|{quantiles_str}|")
-
-
-class InvestmentType(Enum):
-    ConstantFraction = 1
-    ConstantNominal = 2
-        
-        
-############################
-### FUNCTION DEFINITIONS ###
-############################
-def check_value(name: str, value: float, expected: float, rel_tol: float = 1e-5, abs_tol: float = 1e-8, exit_on_fail: bool = False):
-    """
-    Check if a value is approximately equal to a reference value within specified tolerances.
-
-    Args:
-        name (str): The name of the test.
-        value (float): The value to check.
-        expected (float): The expected value.
-        rel_tol (float): The relative tolerance. [Default: 1e-5]
-        abs_tol (float): The absolute tolerance. [Default: 1e-8]
-        exit_on_fail (bool): Whether to raise an AssertionError on failure. [Default: False]
-
-    Raises:
-        AssertionError: If the value is not approximately equal to the reference value. (Only raised if exit_on_fail is True)
-    """
-
-    bool_str = lambda x: "✅" if x else "❌"
-
-    if abs(value - expected) <= max(rel_tol * abs(expected), abs_tol):
-        print(f"{bool_str(True)} {name}: {value:.6f} ≈ {expected:.6f}")
-    else:
-        print(f"{bool_str(False)} {name}: {value:.6f} ≠ {expected:.6f}")
-        if exit_on_fail:
-            raise AssertionError(f"{name}: {value:.6f} ≠ {expected:.6f}")
-
-
-def check_condition(name: str, condition: bool, exit_on_fail: bool = False):
-    """
-    Check if a condition is True and print the result.
-
-    Args:
-        name (str): The name of the test.
-        condition (bool): The condition to check.
-        exit_on_fail (bool): Whether to raise an AssertionError on failure. [Default: False]
-
-    Raises:
-        AssertionError: If the condition is False. (Only raised if exit_on_fail is True)
-    """
-    
-    bool_str = lambda x: "✅" if x else "❌"
-
-    if condition:
-        print(f"{bool_str(True)} {name}: Condition is True")
-    else:
-        print(f"{bool_str(False)} {name}: Condition is False")
-        if exit_on_fail:
-            raise AssertionError(f"{name}: Condition is False")
-
-
-def compute_test_statistics(data: np.ndarray, axis: int = 0) -> TestStatistics:
-    """
-    Compute basic statistics for a given dataset.
-
-    Args:
-        data (np.ndarray): A numpy array of numerical values.
-        axis (int): The axis along which to compute the statistics. [Default: 0]
-
-    Returns:
-        TestStatistics: A dataclass containing the computed statistics.
-    """
-
-    mean = np.mean(data, axis=axis)
-    std_dev = np.std(data, axis=axis)
-    min_value = np.min(data, axis=axis)
-    max_value = np.max(data, axis=axis)
-    drange = max_value - min_value
-    quantiles = {
-        "5%": np.percentile(data, 5, axis=axis),
-        "25%": np.percentile(data, 25, axis=axis),
-        "50%": np.percentile(data, 50, axis=axis),
-        "75%": np.percentile(data, 75, axis=axis),
-        "95%": np.percentile(data, 95, axis=axis),
-    }
-
-    return TestStatistics(
-        mean=mean, 
-        std_dev=std_dev,
-        min_value=min_value, 
-        max_value=max_value, 
-        drange=drange, 
-        quantiles=quantiles
-    )
-
-
-def lognormal_pdf(x, mu, sigma):
-    """
-    Compute the probability density function (PDF) of a lognormal distribution.
-    """
-    density = np.zeros_like(x, dtype=float)
-    positive = x > 0
-
-    density[positive] = (
-        1 / (x[positive] * sigma * np.sqrt(2 * np.pi))
-        * np.exp(-0.5*((np.log(x[positive]) - mu) / sigma) ** 2)
-    )
-
-    return density
-
-
-def exponential_utility(x: float, abs_risk_aversion: float):
-    """
-    Compute the exponential utility of a given value.
-    """
-    return 1 - np.exp(-abs_risk_aversion * x)
-
-
-def expected_utility_exact(x:float, T: float, xi: float, abs_risk_aversion: float, market_params: FinancialMarket):
-    """
-    Compute the expected utility of a given value using the exact formula.
-
-    NOTE: This formula assumes that the risk-free rate is zero (r = 0). If the risk-free rate is not zero, a ValueError will be raised.
-    """
-
-    if not np.isclose(market_params.risk_free_rate, 0):
-        raise ValueError("This formula assumes r = 0.")
-    
-    return 1 - np.exp(
-        -abs_risk_aversion * x
-        -abs_risk_aversion * xi * market_params.drift * T
-        +0.5 * abs_risk_aversion**2 * xi**2 * market_params.volatility**2 * T
-    )
-
-
-def generate_strategies(simulate_wealth_handle, abs_risk_aversion: float, market_params: FinancialMarket, sde_params: SDESimulationParameters) -> list[tuple]:
-    """
-    Generate a list of tuples containing information about optimal and suboptimal investment strategies.
-    """
-
-    # WLOG x = 1
-    x = 1
-
-    # Optimal and suboptimal constant monetary investments
-    xi_star = market_params.drift / (abs_risk_aversion * market_params.volatility**2)
-    xi_sub  = 2 * xi_star
-
-    # The same seed gives both strategies the same Brownian shocks
-    out_optimal = simulate_wealth_handle(initial_wealth=x, constant_investment=xi_star, investment_strategy=InvestmentType.ConstantNominal, market_params=market_params, sde_params=sde_params)
-    out_suboptimal = simulate_wealth_handle(initial_wealth=x, constant_investment=xi_sub, investment_strategy=InvestmentType.ConstantNominal, market_params=market_params, sde_params=sde_params)
-
-    t     = out_optimal.time_grid
-    X_opt = out_optimal.paths["X"]
-    X_sub = out_suboptimal.paths["X"]
-
-    # Utility along all paths
-    U_opt = exponential_utility(X_opt, abs_risk_aversion=abs_risk_aversion)
-    U_sub = exponential_utility(X_sub, abs_risk_aversion=abs_risk_aversion)
-
-    # Mean utility and standard deviation at every time point
-    stats_opt = compute_test_statistics(U_opt, axis=1)
-    stats_sub = compute_test_statistics(U_sub, axis=1)
-
-    margin_opt = 1.96 * stats_opt.std_dev / np.sqrt(sde_params.num_paths)
-    margin_sub = 1.96 * stats_sub.std_dev / np.sqrt(sde_params.num_paths)
-
-    mean_U_opt  = stats_opt.mean
-    lower_U_opt = mean_U_opt - margin_opt
-    upper_U_opt = mean_U_opt + margin_opt
-
-    mean_U_sub  = stats_sub.mean
-    lower_U_sub = mean_U_sub - margin_sub
-    upper_U_sub = mean_U_sub + margin_sub
-
-    # Analytical expected utility
-    analytical_U_opt = expected_utility_exact(
-        x, t, xi_star, abs_risk_aversion, market_params
-    )
-
-    analytical_U_sub = expected_utility_exact(
-        x, t, xi_sub, abs_risk_aversion, market_params
-    )
-
-    # Return the strategies as a list of tuples
-    strategies = [
-        (
-            "Optimal strategy",
-            xi_star,
-            t,
-            X_opt,
-            mean_U_opt,
-            lower_U_opt,
-            upper_U_opt,
-            analytical_U_opt,
-            "b"
-        ),
-        (
-            "Suboptimal strategy",
-            xi_sub,
-            t,
-            X_sub,
-            mean_U_sub,
-            lower_U_sub,
-            upper_U_sub,
-            analytical_U_sub,
-            "orange"
-        )
-    ]
-
-    return strategies
-
+import ipywidgets as widgets
+from IPython.display import display
 
 def plot_SDE_paths(simulated: SDEOutput, plot_component: str = 'W', num_plot_paths: int = 250, title: str = "Simulated SDE Paths", xlabel: str = "Time", ylabel: str = "Value", theoretical_distribution: callable = None, theoretical_mean: float = None):
     """
@@ -453,6 +103,201 @@ def compare_paths(simulated: list[SDEOutput], plot_component: str = 'W', num_plo
     plt.grid()
     plt.show()
 
+##########################
+##########################
+##########################
+
+def visually_explore_brownian_motion(generate_brownian_path_handle):
+    mu_slider = widgets.FloatSlider(
+        value=0.2,
+        min=-1.0,
+        max=1.0,
+        step=0.05,
+        description=r"$\mu$:",
+        continuous_update=True,
+    )
+
+    sigma_slider = widgets.FloatSlider(
+        value=0.3,
+        min=0.05,          # Avoid division by zero
+        max=1.0,
+        step=0.05,
+        description=r"$\sigma$:",
+        continuous_update=True,
+    )
+
+    Msub_slider = widgets.IntSlider(
+        value=25,
+        min=1,    
+        max=500,
+        step=1,
+        description=r"#Paths2Plot:",
+        continuous_update=True,
+    )
+
+    def update_plot(mu, sigma, Msub):
+        # Use M = 2500, T = 1
+        M = 2_500
+        T = 1
+
+        # Regenerate the paths with the selected parameters
+        test_params = SDESimulationParameters(time_horizon=T, time_steps=int(250*T), num_paths=M)
+        out = generate_brownian_path_handle(mu=mu, sigma=sigma, params=test_params)
+
+        # W_T ~ Normal(mu*T, sigma^2*T)
+        theoretical_distribution = lambda x: (
+            1 / (sigma * np.sqrt(2 * np.pi * T))
+            * np.exp(-0.5 * ((x - mu * T) / (sigma * np.sqrt(T))) ** 2)
+        )
+
+        theoretical_mean = mu * T
+
+        plot_SDE_paths(
+            out,
+            plot_component="W",
+            num_plot_paths=Msub,
+            title=rf"Brownian Motion: $\mu={mu:.2f}$, $\sigma={sigma:.2f}$",
+            xlabel="Time",
+            ylabel="Value",
+            theoretical_distribution=theoretical_distribution,
+            theoretical_mean=theoretical_mean,
+        )
+
+    interactive_plot = widgets.interactive_output(update_plot, {"mu": mu_slider, "sigma": sigma_slider, "Msub": Msub_slider})
+
+    display(widgets.HBox([mu_slider, sigma_slider, Msub_slider]), interactive_plot)
+
+
+def visually_explore_stock_prices(simulate_market_handle):
+    b_slider = widgets.FloatSlider(
+        value=0.08,
+        min=-1.0,
+        max=1.0,
+        step=0.05,
+        description=r"$b$:",
+        continuous_update=True,
+    )
+
+    sigma_slider = widgets.FloatSlider(
+        value=0.25,
+        min=0.05,          # Avoid division by zero
+        max=1.0,
+        step=0.05,
+        description=r"$\sigma$:",
+        continuous_update=True,
+    )
+
+    Msub_slider = widgets.IntSlider(
+        value=25,
+        min=1,    
+        max=500,
+        step=1,
+        description=r"#Paths2Plot:",
+        continuous_update=True,
+    )
+
+    def update_plot(b, sigma, Msub):
+        # Use M = 5000, T = 5, r = 0, S0 = 100
+        M  = 2_500 
+        T  = 5
+        r  = 0
+        S0 = 100
+
+        # S_T ~ LogNormal(ln(S0) + (mu - o^2/2)*T, sigma^2*T)
+        theoretical_mean         = S0 * np.exp(b*T)
+        theoretical_distribution = lambda x: (
+            lognormal_pdf(x, mu=np.log(S0) + (b - 0.5*sigma**2)*T, sigma=sigma*np.sqrt(T))
+        )
+
+        market_params = FinancialMarket(risk_free_rate=r, risk_premium=b - r, volatility=sigma)
+        sde_params = SDESimulationParameters(time_horizon=T, time_steps=int(250*T), num_paths=M)
+        out = simulate_market_handle(initial_stock_price=S0, market_params=market_params, sde_params=sde_params)
+
+        plot_SDE_paths(
+            out, 
+            plot_component='stock', 
+            num_plot_paths=Msub, 
+            title="Simulated Stock Price Paths", 
+            xlabel="Time", 
+            ylabel="Value", 
+            theoretical_distribution=theoretical_distribution, 
+            theoretical_mean=theoretical_mean
+        )
+
+    box = widgets.HBox([b_slider, sigma_slider, Msub_slider])
+    interactive_plot = widgets.interactive_output(update_plot, {"b": b_slider, "sigma": sigma_slider, "Msub": Msub_slider})
+
+    display(box, interactive_plot)
+
+###
+###
+###
+
+def show_euler_maruyama_breakdown(simulate_market_handle, simulate_market_dynamics_exact_handle):
+    b_slider = widgets.FloatSlider(
+        value=-1,
+        min=-1.0,
+        max=1.0,
+        step=0.05,
+        description=r"$b$:",
+        continuous_update=True,
+    )
+
+    sigma_slider = widgets.FloatSlider(
+        value=0.75,
+        min=0.05,          # Avoid division by zero
+        max=1.0,
+        step=0.05,
+        description=r"$\sigma$:",
+        continuous_update=True,
+    )
+
+    nsteps_slider = widgets.IntSlider(
+        value=3,
+        min=1,
+        max=50,
+        step=1,
+        description=r"#TimeSteps:",
+        continuous_update=True,
+    )
+
+    def update_plot(b, sigma, nSteps):
+        # Use M = 50, T = 1, r = 0, S0 = 100
+        M  = 50
+        T  = 1
+        r  = 0
+        S0 = 100
+
+        market_params = FinancialMarket(risk_free_rate=0, risk_premium=b, volatility=sigma)
+        sde_params    = SDESimulationParameters(time_horizon=T, time_steps=nSteps, num_paths=M)
+        
+        probability_negative_step = norm.cdf(- (1 + b * T/nSteps) / (sigma * np.sqrt(T/nSteps)))
+        
+        title = rf"""Comparison of EM Scheme vs Exact Solution for Stock Prices
+        Probability of negative stock price for b={b:.2f}, $\sigma$={sigma:.2f}, dt={sde_params.dt:.3f}: {100 * probability_negative_step: .2f}%"""
+        
+        out_em    = simulate_market_handle(initial_stock_price=S0, market_params=market_params, sde_params=sde_params)
+        out_exact = simulate_market_dynamics_exact_handle(initial_stock_price=S0, market_params=market_params, sde_params=sde_params)
+        
+        compare_paths(
+            [out_em, out_exact], 
+            plot_component='stock', 
+            num_plot_paths=M, 
+            title=title, 
+            xlabel="Time", 
+            ylabel="Stock Price", 
+            colororder=['blue', 'orange'], 
+            labels=['EM Scheme', 'Exact Solution']
+        )
+
+    box = widgets.HBox([b_slider, sigma_slider, nsteps_slider])
+    interactive_plot = widgets.interactive_output(update_plot, {"b": b_slider, "sigma": sigma_slider, "nSteps": nsteps_slider})
+
+    display(box, interactive_plot)
+
+###
+###
+###
 
 def visualize_degenerate_paths(simulate_market_handle, M: int = 1000, M_inner: int = 100, drift_range: tuple = (-1, 1), vola_range: tuple = (0, 1), dt_range: tuple = (1e-3, 1)):
     """
@@ -513,6 +358,210 @@ def visualize_degenerate_paths(simulate_market_handle, M: int = 1000, M_inner: i
 
     plt.show()  
 
+###
+###
+###
+
+def compare_investment_strategies(simulate_wealth_handle):
+    r_slider = widgets.FloatSlider(
+        value=0.025,
+        min=-0.1,
+        max=0.1,
+        step=0.005,
+        description=r"$r$:",
+        continuous_update=True,
+    )
+
+    b_slider = widgets.FloatSlider(
+        value=0.08,
+        min=-0.2,
+        max=0.2,
+        step=0.005,
+        description=r"$b$:",
+        continuous_update=True,
+    )
+
+    sigma_slider = widgets.FloatSlider(
+        value=0.25,
+        min=0.05,          # Avoid division by zero
+        max=0.5,
+        step=0.005,
+        description=r"$\sigma$:",
+        continuous_update=True,
+    )
+
+    merton_check = widgets.Checkbox(
+        value=True,
+        description='Use growth optimal $\\pi$ (gof)',
+    )
+
+    def update_plot(r, b, sigma, use_merton_fraction):
+        # Use M = 10, T = 25, X0 = 100
+        M  = 10
+        T  = 25
+        X0 = 100
+
+        market_params = FinancialMarket(risk_free_rate=r, risk_premium=b - r, volatility=sigma)
+        sde_params = SDESimulationParameters(time_horizon=T, time_steps=250*T, num_paths=M)
+        
+        if use_merton_fraction:
+            pi = (b - r) / (sigma**2)
+        else:
+            pi = 0.67
+
+        title = rf"""Comparison of Constant Fraction vs Constant Nominal Investment Strategies
+        r = {r:.3f} b = {b:.3f} $\sigma$ = {sigma:.3f}
+        Using $\pi = {pi:.3f}${" (gof)" if use_merton_fraction else ""} and $\xi = {pi*X0:.2f}$"""
+        
+        out_constant_fraction = simulate_wealth_handle(initial_wealth=X0, constant_investment=pi, investment_strategy=InvestmentType.ConstantFraction, market_params=market_params, sde_params=sde_params)
+        out_constant_nominal  = simulate_wealth_handle(initial_wealth=X0, constant_investment=pi*X0, investment_strategy=InvestmentType.ConstantNominal, market_params=market_params, sde_params=sde_params)
+        
+        compare_paths(
+            [out_constant_fraction, out_constant_nominal],
+            plot_component='X',
+            num_plot_paths=M,
+            title=title,
+            xlabel="Time",
+            ylabel="Wealth",
+            colororder=['blue', 'orange'],
+            labels=['Constant Fraction', 'Constant Nominal']
+        )
+
+    box = widgets.VBox([widgets.HBox([r_slider, b_slider, sigma_slider]), merton_check])
+    interactive_plot = widgets.interactive_output(update_plot, {"r": r_slider, "b": b_slider, "sigma": sigma_slider, "use_merton_fraction": merton_check})
+
+    display(box, interactive_plot)
+
+###
+###
+###
+
+def explore_parameter_impact_on_stock_prices(simulate_market_handle):
+    b_1_slider = widgets.FloatSlider(
+        value=-0.1,
+        min=-0.2,
+        max=0.2,
+        step=0.005,
+        description=r"$b_1$:",
+        continuous_update=True,
+    )
+
+    b_2_slider = widgets.FloatSlider(
+        value=0.1,
+        min=-0.2,
+        max=0.2,
+        step=0.005,
+        description=r"$b_2$:",
+        continuous_update=True,
+    )
+
+    sigma_1_slider = widgets.FloatSlider(
+        value=0.2,
+        min=0.05,
+        max=0.5,
+        step=0.005,
+        description=r"$\sigma_1$:",
+        continuous_update=True,
+    )
+
+    sigma_2_slider = widgets.FloatSlider(
+        value=0.4,
+        min=0.05,
+        max=0.5,
+        step=0.005,
+        description=r"$\sigma_2$:",
+        continuous_update=True,
+    )
+
+    def update_plot(b_1, b_2, sigma_1, sigma_2):
+        # Use M = 1, T = 10, r = 0, S0 = 100
+        T  = 10
+        r  = 0
+        S0 = 100
+
+        # compare paths for different pairs of (drift, volatility) values
+        params_list = [
+            (b_1, sigma_1),
+            (b_2, sigma_1),
+            (b_1, sigma_2),
+            (b_2, sigma_2)
+        ]
+
+        out_list = []
+        for drift, vola in params_list:
+            market_params = FinancialMarket(risk_free_rate=r, risk_premium=drift, volatility=vola)
+            sde_params = SDESimulationParameters(time_horizon=T, time_steps=int(T*250), num_paths=1)
+            out = simulate_market_handle(initial_stock_price=S0, market_params=market_params, sde_params=sde_params)
+            out_list.append(out)
+
+        compare_paths(
+            out_list, 
+            plot_component='stock',
+            num_plot_paths=1,
+            title="Comparison of Stock Price Dynamics for Different (Drift, Volatility) Pairs",
+            xlabel="Time",
+            ylabel="Stock Price",
+            colororder=['blue', 'orange', 'green', 'red'],
+            labels=[f"Drift: {drift:.3f}, Volatility: {vola:.3f}" for drift, vola in params_list]
+        )
+
+    box = widgets.VBox([widgets.HBox([b_1_slider, b_2_slider]), widgets.HBox([sigma_1_slider, sigma_2_slider])])
+    interactive_plot = widgets.interactive_output(update_plot, {"b_1": b_1_slider, "b_2": b_2_slider, "sigma_1": sigma_1_slider, "sigma_2": sigma_2_slider})
+
+    display(box, interactive_plot)
+
+
+def explore_investment_fraction_impact_on_wealth(simulate_wealth_handle):
+    custom_fractions = widgets.FloatSlider(
+        value=0.67,
+        min=-1,
+        max=2,
+        step=0.01,
+        description=r"$\pi$:",
+        continuous_update=True
+    )
+
+    def update_plot(pi):
+        # Use M = 1, T = 10, r = 0.025, b = 0.08, sigma = 0.25, S0 = 100
+        T  = 10
+        r  = 0.025
+        b = 0.08
+        sigma = 0.25
+        S0 = 100
+
+        # compare wealth paths for different values of pi
+        values = np.array([0, 0.25, 0.5, 0.75, 1.0, pi])
+        colors = ['blue', 'orange', 'green', 'red', 'purple', 'k']
+
+        idx = np.argsort(values)
+        risky_fractions = values[idx]
+        colors = [colors[i] for i in idx]
+
+        out_list = []
+        for pi in risky_fractions:
+            market_params = FinancialMarket(risk_free_rate=r, risk_premium=b-r, volatility=sigma)
+            sde_params = SDESimulationParameters(time_horizon=T, time_steps=int(T*250), num_paths=1)
+            out = simulate_wealth_handle(initial_wealth=S0, constant_investment=pi, investment_strategy=InvestmentType.ConstantFraction, market_params=market_params, sde_params=sde_params)
+            out_list.append(out)
+
+        compare_paths(
+            out_list,
+            plot_component='X',
+            num_plot_paths=1,
+            title="Comparison of Wealth Dynamics for Different Investment Fractions",
+            xlabel="Time",
+            ylabel="Wealth",
+            colororder=colors,
+            labels=[f"Investment Fraction: {pi:.3f}" for pi in risky_fractions]
+        )
+
+    box = widgets.HBox([custom_fractions])
+    interactive_plot = widgets.interactive_output(update_plot, {"pi": custom_fractions})
+    display(box, interactive_plot)
+
+###
+###
+###
 
 def plot_expected_utility_mc(abs_risk_aversion: float, runs: int, market_params: FinancialMarket):
     """
@@ -592,7 +641,8 @@ def plot_strategies(strategies: list[tuple]):
 
         ax.axhline(0, color="grey", lw=0.8, alpha=0.5)
         ax.set_xlabel("Time")
-        ax.set_ylabel("Wealth paths")
+        ax.set_ylabel("Wealth paths", color=color)
+        ax.tick_params(axis="y", labelcolor=color)
         ax.set_title(rf"{name}: $\xi={xi:.2f}$")
         ax.grid(alpha=0.2)
 
@@ -603,7 +653,8 @@ def plot_strategies(strategies: list[tuple]):
         utility_axis.plot(t, mean_utility, color="mediumpurple", lw=2.5, label="Monte Carlo mean utility")
         utility_axis.plot(t, analytical_mean, color="black", linestyle="--", lw=1.5, label="Analytical mean utility")
 
-        utility_axis.set_ylabel("Mean utility")
+        utility_axis.set_ylabel("Mean utility", color="mediumpurple")
+        utility_axis.tick_params(axis="y", labelcolor="mediumpurple")
         utility_axis.set_ylim(utility_min - utility_padding, utility_max + utility_padding)
 
         left_lines, left_labels = ax.get_legend_handles_labels()
@@ -616,6 +667,40 @@ def plot_strategies(strategies: list[tuple]):
     plt.tight_layout()
     plt.show()
 
+def optimal_vs_suboptimal_plot():
+    xi_sub_slider = widgets.FloatSlider(
+        value=3.2,
+        min=-4,
+        max=12,
+        step=0.1,
+        description=r"$\xi_{\mathrm{sub}}$:",
+        continuous_update=False
+    )
+
+    def update_plot(xi_sub):
+        # Use M = 5000, T = 10, r = 0, b = 0.05, sigma = 0.25, x = 1, abs_risk_aversion = 0.25
+        M                 = 5_000
+        T                 = 10
+        r                 = 0.0
+        b                 = 0.05
+        sigma             = 0.25
+        x                 = 1.0
+        abs_risk_aversion = 0.25
+
+        market_params = FinancialMarket(risk_free_rate=r, risk_premium=b-r, volatility=sigma)
+        sde_params = SDESimulationParameters(time_horizon=T, time_steps=int(250*T), num_paths=M)
+
+        strategies = generate_strategies(simulate_wealth, xi_sub, abs_risk_aversion, market_params=market_params, sde_params=sde_params)
+
+        plot_strategies(strategies)
+
+    box = widgets.HBox([xi_sub_slider])
+    interactive_plot = widgets.interactive_output(update_plot, {"xi_sub": xi_sub_slider})
+    display(box, interactive_plot)
+
+###
+###
+###
 
 def plot_wealth_consumption_policy(generate_deflator_H_handle, market_params: FinancialMarket, sde_params: SDESimulationParameters):
     """
