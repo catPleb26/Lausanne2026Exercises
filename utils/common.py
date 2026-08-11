@@ -351,3 +351,28 @@ def generate_strategies(simulate_wealth_handle, xi_sub: float, abs_risk_aversion
     ]
 
     return strategies
+
+def cumulative_trapezoid(values: np.ndarray, dt: float) -> np.ndarray:
+    '''Integrate pathwise rates without requiring an additional SciPy helper.'''
+
+    cumulative = np.zeros_like(values)
+    cumulative[1:, :] = np.cumsum(
+        0.5 * (values[:-1, :] + values[1:, :]) * dt,
+        axis=0,
+    )
+    return cumulative
+
+def exponential_integral(rate: float, maturity: float) -> float:
+    """
+    Compute the exponential integral of a given rate over a specified maturity.
+
+    Args:
+        rate (float): The rate for which to compute the exponential integral.
+        maturity (float): The maturity time over which to compute the integral.
+
+    Returns:
+        float: The computed exponential integral.
+    """
+    if np.isclose(rate, 0.0):
+        return maturity
+    return np.expm1(rate * maturity) / rate
