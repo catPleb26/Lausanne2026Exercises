@@ -376,3 +376,140 @@ def exponential_integral(rate: float, maturity: float) -> float:
     if np.isclose(rate, 0.0):
         return maturity
     return np.expm1(rate * maturity) / rate
+
+
+###
+###
+###
+### DAY 4
+###
+###
+###
+
+IPCC_AR6_SCENARIO_CENTRAL = {
+    "SSP1-1.9": np.array([1.5, 1.6, 1.4]),
+    "SSP1-2.6": np.array([1.5, 1.7, 1.8]),
+    "SSP2-4.5": np.array([1.5, 2.0, 2.7]),
+    "SSP5-8.5": np.array([1.6, 2.4, 4.4]),
+}
+
+
+def rebase_temperature_anomaly(years: np.ndarray, anomaly: np.ndarray, baseline_start: int = 1850, baseline_end: int = 1900) -> np.ndarray:
+    """Rebase a temperature-anomaly series to a selected reference period."""
+
+    years   = np.asarray(years)
+    anomaly = np.asarray(anomaly, dtype=float)
+
+    if years.shape != anomaly.shape:
+        raise ValueError("Years and anomalies must have the same shape.")
+
+    baseline_mask = (years >= baseline_start) & (years <= baseline_end)
+    if not np.any(baseline_mask):
+        raise ValueError("The selected baseline period is not contained in the data.")
+
+    return anomaly - np.mean(anomaly[baseline_mask])
+
+
+def estimate_arithmetic_brownian_parameters(years: np.ndarray, anomaly: np.ndarray) -> tuple[float, float]:
+    """Estimate annual drift and volatility from consecutive annual changes."""
+
+    years   = np.asarray(years)
+    anomaly = np.asarray(anomaly, dtype=float)
+
+    if years.shape != anomaly.shape:
+        raise ValueError("Years and anomalies must have the same shape.")
+    if len(years) < 3:
+        raise ValueError("At least three annual observations are required.")
+    if not np.allclose(np.diff(years), 1):
+        raise ValueError("The observations must be consecutive annual values.")
+
+    annual_changes = np.diff(anomaly)
+    drift          = np.mean(annual_changes)
+    volatility     = np.std(annual_changes - drift, ddof=1)
+
+    return drift, volatility
+
+
+def build_climate_scenario_mean(forecast_years: np.ndarray, initial_anomaly: float, scenario_values: np.ndarray) -> np.ndarray:
+    """Interpolate an illustrative annual mean path through the IPCC period midpoints."""
+
+    forecast_years = np.asarray(forecast_years)
+    scenario_values = np.asarray(scenario_values, dtype=float)
+
+    if scenario_values.shape != (3,):
+        raise ValueError("Scenario values must contain the near-, mid-, and long-term central estimates.")
+    if forecast_years[0] != 2020:
+        raise ValueError("The forecast must start in 2020.")
+
+    anchor_years  = np.array([2020, 2030, 2050, 2090, 2100])
+    anchor_values = np.array([initial_anomaly, *scenario_values, scenario_values[-1]])
+
+    return np.interp(forecast_years, anchor_years, anchor_values)
+
+###
+###
+###
+### DAY 4
+###
+###
+###
+
+IPCC_AR6_SCENARIO_CENTRAL = {
+    "SSP1-1.9": np.array([1.5, 1.6, 1.4]),
+    "SSP1-2.6": np.array([1.5, 1.7, 1.8]),
+    "SSP2-4.5": np.array([1.5, 2.0, 2.7]),
+    "SSP5-8.5": np.array([1.6, 2.4, 4.4]),
+}
+
+
+def rebase_temperature_anomaly(years: np.ndarray, anomaly: np.ndarray, baseline_start: int = 1850, baseline_end: int = 1900) -> np.ndarray:
+    """Rebase a temperature-anomaly series to a selected reference period."""
+
+    years   = np.asarray(years)
+    anomaly = np.asarray(anomaly, dtype=float)
+
+    if years.shape != anomaly.shape:
+        raise ValueError("Years and anomalies must have the same shape.")
+
+    baseline_mask = (years >= baseline_start) & (years <= baseline_end)
+    if not np.any(baseline_mask):
+        raise ValueError("The selected baseline period is not contained in the data.")
+
+    return anomaly - np.mean(anomaly[baseline_mask])
+
+
+def estimate_arithmetic_brownian_parameters(years: np.ndarray, anomaly: np.ndarray) -> tuple[float, float]:
+    """Estimate annual drift and volatility from consecutive annual changes."""
+
+    years   = np.asarray(years)
+    anomaly = np.asarray(anomaly, dtype=float)
+
+    if years.shape != anomaly.shape:
+        raise ValueError("Years and anomalies must have the same shape.")
+    if len(years) < 3:
+        raise ValueError("At least three annual observations are required.")
+    if not np.allclose(np.diff(years), 1):
+        raise ValueError("The observations must be consecutive annual values.")
+
+    annual_changes = np.diff(anomaly)
+    drift          = np.mean(annual_changes)
+    volatility     = np.std(annual_changes - drift, ddof=1)
+
+    return drift, volatility
+
+
+def build_climate_scenario_mean(forecast_years: np.ndarray, initial_anomaly: float, scenario_values: np.ndarray) -> np.ndarray:
+    """Interpolate an illustrative annual mean path through the IPCC period midpoints."""
+
+    forecast_years = np.asarray(forecast_years)
+    scenario_values = np.asarray(scenario_values, dtype=float)
+
+    if scenario_values.shape != (3,):
+        raise ValueError("Scenario values must contain the near-, mid-, and long-term central estimates.")
+    if forecast_years[0] != 2020:
+        raise ValueError("The forecast must start in 2020.")
+
+    anchor_years  = np.array([2020, 2030, 2050, 2090, 2100])
+    anchor_values = np.array([initial_anomaly, *scenario_values, scenario_values[-1]])
+
+    return np.interp(forecast_years, anchor_years, anchor_values)

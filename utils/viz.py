@@ -687,7 +687,7 @@ def optimal_vs_suboptimal_plot(simulate_wealth_handle):
         max=12,
         step=0.1,
         description=r"$\xi_{\mathrm{sub}}$:",
-        continuous_update=False
+        continuous_update=True
     )
 
     def update_plot(xi_sub):
@@ -812,7 +812,7 @@ def explore_continuous_vs_buy_and_hold(simulate_strategy_handle):
         max=0.08,
         step=0.005,
         description=r"$r$:",
-        continuous_update=False,
+        continuous_update=True,
     )
 
     b_slider = widgets.FloatSlider(
@@ -821,7 +821,7 @@ def explore_continuous_vs_buy_and_hold(simulate_strategy_handle):
         max=0.18,
         step=0.005,
         description=r"$b$:",
-        continuous_update=False,
+        continuous_update=True,
     )
 
     sigma_slider = widgets.FloatSlider(
@@ -830,7 +830,7 @@ def explore_continuous_vs_buy_and_hold(simulate_strategy_handle):
         max=0.60,
         step=0.01,
         description=r"$\sigma$:",
-        continuous_update=False,
+        continuous_update=True,
     )
 
     path_slider = widgets.IntSlider(
@@ -839,7 +839,7 @@ def explore_continuous_vs_buy_and_hold(simulate_strategy_handle):
         max=49,
         step=1,
         description="Path:",
-        continuous_update=False,
+        continuous_update=True,
     )
 
     def update_plot(r, b, sigma, path_index):
@@ -983,14 +983,14 @@ def explore_cppi_gap_risk(simulate_cppi_handle):
         max=12.0,
         step=0.5,
         description=r"$M$:",
-        continuous_update=False,
+        continuous_update=True,
     )
 
     rebalancing_slider = widgets.SelectionSlider(
         options=[1, 2, 4, 12, 26, 52, 250],
         value=12,
         description="Trades/year:",
-        continuous_update=False,
+        continuous_update=True,
     )
 
     cap_checkbox = widgets.Checkbox(
@@ -1116,7 +1116,7 @@ def explore_log_vs_value_preserving(simulate_strategy_handle):
         max=0.05,
         step=0.005,
         description=r"$r$:",
-        continuous_update=False,
+        continuous_update=True,
     )
 
     b_slider = widgets.FloatSlider(
@@ -1125,7 +1125,7 @@ def explore_log_vs_value_preserving(simulate_strategy_handle):
         max=0.15,
         step=0.005,
         description=r"$b$:",
-        continuous_update=False,
+        continuous_update=True,
     )
 
     sigma_slider = widgets.FloatSlider(
@@ -1134,14 +1134,14 @@ def explore_log_vs_value_preserving(simulate_strategy_handle):
         max=0.50,
         step=0.01,
         description=r"$\sigma$:",
-        continuous_update=False,
+        continuous_update=True,
     )
 
     maturity_slider = widgets.SelectionSlider(
         options=[1, 5, 10, 20],
         value=10,
         description=r"$T$:",
-        continuous_update=False,
+        continuous_update=True,
     )
 
     path_slider = widgets.IntSlider(
@@ -1150,7 +1150,7 @@ def explore_log_vs_value_preserving(simulate_strategy_handle):
         max=49,
         step=1,
         description="Path:",
-        continuous_update=False,
+        continuous_update=True,
     )
 
     def update_plot(r, b, sigma, maturity, path_index):
@@ -1242,6 +1242,305 @@ def explore_log_vs_value_preserving(simulate_strategy_handle):
             "sigma": sigma_slider,
             "maturity": maturity_slider,
             "path_index": path_slider,
+        },
+    )
+
+    display(controls, interactive_plot)
+
+###
+###
+###
+### DAY 4
+###
+###
+###
+
+def explore_payout_plans(simulate_payout_plans_handle):
+    """Interactively compare four fund payout plans and an annuity reference."""
+
+    lifetime_slider = widgets.IntSlider(
+        value=21,
+        min=10,
+        max=30,
+        step=1,
+        description=r"$1/\lambda$:",
+        continuous_update=True,
+    )
+
+    discount_slider = widgets.FloatSlider(
+        value=0.03,
+        min=0.005,
+        max=0.08,
+        step=0.005,
+        description=r"$\delta$:",
+        continuous_update=True,
+    )
+
+    tail_slider = widgets.SelectionSlider(
+        options=[("10%", 0.10), ("5%", 0.05), ("1%", 0.01)],
+        value=0.05,
+        description=r"$z$:",
+        continuous_update=True,
+    )
+
+    path_slider = widgets.IntSlider(
+        value=0,
+        min=0,
+        max=49,
+        step=1,
+        description="Path:",
+        continuous_update=True,
+    )
+
+    def update_plot(expected_lifetime, discount_rate, tail_probability, path_index):
+        # Use M = 2500, X0 = 100,000
+        M  = 2_500
+        X0 = 100_000.0
+
+        mortality_rate = 1 / expected_lifetime
+        quantile_horizon = -np.log(tail_probability) / mortality_rate
+        simulation_horizon = quantile_horizon + 4 * expected_lifetime
+
+        market = FinancialMarket(risk_free_rate=0.025, risk_premium=0.05, volatility=0.25)
+        params = SDESimulationParameters(time_horizon=simulation_horizon, time_steps=int(12 * simulation_horizon), num_paths=M)
+
+        annuity_rate = X0 * (market.risk_free_rate + mortality_rate)
+
+        out = simulate_payout_plans_handle(
+            initial_wealth=X0,
+            expected_lifetime=expected_lifetime,
+            discount_rate=discount_rate,
+            tail_probability=tail_probability,
+            market_params=market,
+            sde_params=params,
+        )
+
+        t = out.time_grid
+        lifetimes = out.paths["lifetime"]
+
+        plans = [
+            ("standard", "Standard infinity", "b"),
+            ("mortality", "Exponential lifetime", "orange"),
+            ("mean_horizon", r"Fixed $T=\mathbb{E}[\tau]$", "g"),
+            ("quantile", r"Quantile horizon $T_z$", "mediumpurple"),
+        ]
+
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5.2))
+
+        plot_until = min(simulation_horizon, max(50, quantile_horizon + 5))
+        plot_mask = t <= plot_until
+
+        for key, label, color in plans:
+            axes[0].plot(t[plot_mask], out.paths[f"{key}_wealth"][plot_mask, path_index], color=color, lw=2.2, label=label)
+            axes[1].plot(t[plot_mask], out.paths[f"{key}_consumption"][plot_mask, path_index], color=color, lw=2.2, label=label)
+
+        axes[0].axvline(expected_lifetime, color="grey", linestyle="--", lw=1.2, label=r"$\mathbb{E}[\tau]$")
+        axes[0].axvline(quantile_horizon, color="black", linestyle=":", lw=1.5, label=r"$T_z$")
+        axes[0].axvline(lifetimes[path_index], color="orange", linestyle="-.", lw=1.5, label="Actual lifetime")
+        axes[0].set_title("Fund wealth on the same market path")
+        axes[0].set_xlabel("Years")
+        axes[0].set_ylabel("Wealth")
+        axes[0].grid(alpha=0.25)
+        # axes[0].legend(fontsize=8)
+
+        axes[1].axvline(expected_lifetime, color="grey", linestyle="--", lw=1.2, label=r"$\mathbb{E}[\tau]$")
+        axes[1].axvline(quantile_horizon, color="black", linestyle=":", lw=1.5, label=r"$T_z$")
+        axes[1].axvline(lifetimes[path_index], color="orange", linestyle="-.", lw=1.5, label="Actual lifetime")
+        axes[1].axhline(annuity_rate, color="crimson", linestyle="--", lw=1.5, label="Fair annuity")
+        axes[1].set_title("Annual payout on the same market path")
+        axes[1].set_xlabel("Years")
+        axes[1].set_ylabel("Annual payout")
+        axes[1].grid(alpha=0.25)
+        axes[1].legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.25), ncol=2)
+
+        death_index = np.searchsorted(t, np.minimum(lifetimes, t[-1]), side="right") - 1
+        path_index_array = np.arange(M)
+
+        mean_lifetime_consumption = []
+        depletion_probability = []
+        metric_labels = []
+
+        for key, label, color in plans:
+            cumulative = out.paths[f"{key}_cumulative_consumption"]
+            mean_lifetime_consumption.append(np.mean(cumulative[death_index, path_index_array]))
+
+            if key == "mean_horizon":
+                depletion_probability.append(np.mean(lifetimes > expected_lifetime))
+            elif key == "quantile":
+                depletion_probability.append(np.mean(lifetimes > quantile_horizon))
+            else:
+                depletion_probability.append(0.0)
+            metric_labels.append(label)
+
+        mean_lifetime_consumption.append(np.mean(annuity_rate * lifetimes))
+        depletion_probability.append(0.0)
+        metric_labels.append("Fair annuity")
+
+        locations = np.arange(len(metric_labels))
+        bars = axes[2].bar(locations, mean_lifetime_consumption, color=[plan[2] for plan in plans] + ["crimson"], alpha=0.70)
+        axes[2].set_xticks(locations)
+        axes[2].set_xticklabels(metric_labels, rotation=25, ha="right")
+        axes[2].set_title("Lifetime payout and longevity risk")
+        axes[2].set_ylabel("Mean payout received before death")
+        axes[2].grid(axis="y", alpha=0.25)
+
+        risk_axis = axes[2].twinx()
+        risk_axis.plot(locations, depletion_probability, color="black", marker="o", linestyle="--", lw=1.5)
+        risk_axis.set_ylabel("Probability plan ends before death")
+        risk_axis.yaxis.set_major_formatter(plt.FuncFormatter(lambda value, position: f"{value:.0%}"))
+        risk_axis.set_ylim(0, max(0.5, 1.15 * max(depletion_probability)))
+
+        fig.suptitle(
+            rf"Payout plans: $\mathbb{{E}}[\tau]={expected_lifetime}$, "
+            rf"$T_z={quantile_horizon:.1f}$, $\delta={discount_rate:.3f}$",
+            fontsize=15,
+        )
+        plt.tight_layout()
+        plt.show()
+
+    controls = widgets.VBox([
+        widgets.HBox([lifetime_slider, discount_slider, tail_slider]),
+        path_slider,
+    ])
+    interactive_plot = widgets.interactive_output(
+        update_plot,
+        {
+            "expected_lifetime": lifetime_slider,
+            "discount_rate": discount_slider,
+            "tail_probability": tail_slider,
+            "path_index": path_slider,
+        },
+    )
+
+    display(controls, interactive_plot)
+
+
+def explore_climate_scenarios(history_years, history_anomaly, annual_volatility, simulate_climate_scenario_handle):
+    """Interactively simulate arithmetic-Brownian temperature paths around IPCC scenario means."""
+
+    scenario_dropdown = widgets.Dropdown(
+        options=list(IPCC_AR6_SCENARIO_CENTRAL.keys()),
+        value="SSP2-4.5",
+        description="Scenario:",
+    )
+
+    threshold_slider = widgets.FloatSlider(
+        value=1.5,
+        min=1.0,
+        max=4.0,
+        step=0.1,
+        description="Threshold:",
+        continuous_update=True,
+    )
+
+    volatility_slider = widgets.FloatSlider(
+        value=1.0,
+        min=0,
+        max=2,
+        step=0.05,
+        description=r"$\sigma$ mult.:",
+        continuous_update=True,
+    )
+
+    path_slider = widgets.IntSlider(
+        value=25,
+        min=5,
+        max=250,
+        step=5,
+        description="#Paths:",
+        continuous_update=False,
+    )
+
+    def update_plot(scenario, threshold, volatility_multiplier, num_plot_paths):
+        forecast_years = np.arange(2020, 2101)
+        initial_anomaly = history_anomaly[-1]
+        num_paths = 5_000
+
+        scenario_means = {
+            name: build_climate_scenario_mean(forecast_years, initial_anomaly, values)
+            for name, values in IPCC_AR6_SCENARIO_CENTRAL.items()
+        }
+
+        out = simulate_climate_scenario_handle(
+            initial_anomaly=initial_anomaly,
+            forecast_years=forecast_years,
+            scenario_mean=scenario_means[scenario],
+            annual_volatility=volatility_multiplier * annual_volatility,
+            num_paths=num_paths
+        )
+
+        K = out.paths["temperature_anomaly"]
+        selected_mean = out.paths["scenario_mean"]
+
+        colors = {
+            "SSP1-1.9": "green",
+            "SSP1-2.6": "teal",
+            "SSP2-4.5": "orange",
+            "SSP5-8.5": "crimson",
+        }
+
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5.2))
+
+        # Compute moving average for the history anomaly to smooth out short-term fluctuations
+        window_size = 10
+        history_anomaly_smoothed = np.convolve(history_anomaly, np.ones(window_size)/window_size, mode='valid')
+        history_anomaly_smoothed = np.append(history_anomaly_smoothed, scenario_means[scenario][0])
+        smoothed_years = np.arange(history_years[window_size - 2], history_years[-1] + 1)
+
+        axes[0].plot(history_years, history_anomaly, color="black", lw=1.8, label="HadCRUT5 history")
+        axes[0].plot(smoothed_years, history_anomaly_smoothed, color="blue", lw=2.0, linestyle="-", label="Smoothed history")
+        for name, mean_path in scenario_means.items():
+            width = 3.0 if name == scenario else 1.5
+            alpha = 1.0 if name == scenario else 0.55
+            axes[0].plot(forecast_years, mean_path, color=colors[name], lw=width, alpha=alpha, label=name)
+        axes[0].axvline(2020, color="grey", linestyle="--", lw=1.3)
+        axes[0].set_title("History and conditional scenario means")
+        axes[0].set_xlabel("Year")
+        axes[0].set_ylabel(r"Warming relative to 1850--1900 ($^\circ$C)")
+        axes[0].grid(alpha=0.25)
+        axes[0].legend(fontsize=8)
+
+        lower_05, lower_25, upper_75, upper_95 = np.percentile(K, [5, 25, 75, 95], axis=1)
+        axes[1].fill_between(forecast_years, lower_05, upper_95, color=colors[scenario], alpha=0.15, label="5%--95% simulation band")
+        axes[1].fill_between(forecast_years, lower_25, upper_75, color=colors[scenario], alpha=0.28, label="25%--75% simulation band")
+        axes[1].plot(forecast_years, K[:, :num_plot_paths], color=colors[scenario], alpha=0.08, lw=0.7)
+        axes[1].plot(forecast_years, selected_mean, color="black", lw=2.4, label="Scenario mean")
+        axes[1].axhline(threshold, color="crimson", linestyle="--", lw=1.8, label=rf"${threshold:.1f}^\circ$C threshold")
+        axes[1].set_title(f"Arithmetic-Brownian paths: {scenario}")
+        axes[1].set_xlabel("Year")
+        axes[1].set_ylabel(r"Warming relative to 1850--1900 ($^\circ$C)")
+        axes[1].grid(alpha=0.25)
+        axes[1].legend(fontsize=8)
+
+        exceedance_probability = np.mean(K >= threshold, axis=1)
+        axes[2].plot(forecast_years, exceedance_probability, color=colors[scenario], lw=2.5)
+        axes[2].fill_between(forecast_years, 0, exceedance_probability, color=colors[scenario], alpha=0.15)
+        axes[2].set_title("Probability an individual year exceeds the threshold")
+        axes[2].set_xlabel("Year")
+        axes[2].set_ylabel("Estimated probability")
+        axes[2].set_ylim(0, 1)
+        axes[2].yaxis.set_major_formatter(plt.FuncFormatter(lambda value, position: f"{value:.0%}"))
+        axes[2].grid(alpha=0.25)
+
+        fig.suptitle(
+            rf"Climate scenario experiment: historical $\hat\sigma={annual_volatility:.3f}$, "
+            rf"simulation $\sigma={volatility_multiplier * annual_volatility:.3f}$",
+            fontsize=15,
+        )
+        plt.tight_layout()
+        plt.show()
+
+    controls = widgets.VBox([
+        widgets.HBox([scenario_dropdown, threshold_slider]),
+        widgets.HBox([volatility_slider, path_slider]),
+    ])
+    interactive_plot = widgets.interactive_output(
+        update_plot,
+        {
+            "scenario": scenario_dropdown,
+            "threshold": threshold_slider,
+            "volatility_multiplier": volatility_slider,
+            "num_plot_paths": path_slider
         },
     )
 
