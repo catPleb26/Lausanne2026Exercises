@@ -4,23 +4,25 @@ The modelling implementation is kept outside the notebook so participants see
 their experiment settings next to the resulting comparison.
 """
 
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
-import warnings
 
+import ipywidgets as widgets
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from IPython.display import display
+from matplotlib.figure import Figure
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import ConstantKernel, RBF
+from sklearn.gaussian_process.kernels import RBF, ConstantKernel
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.neural_network import MLPRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import PolynomialFeatures, StandardScaler
-
 
 MONETARY_SCALE = 1e9
 RANDOM_SEED = 42
@@ -72,7 +74,9 @@ def load_data() -> LabData:
     if len(test_X) != len(test_Y):
         raise ValueError("test_X and test_Y must have the same number of rows.")
     if train_Z.shape[1] != 54:
-        raise ValueError("The training data should contain 54 inner outcomes per state.")
+        raise ValueError(
+            "The training data should contain 54 inner outcomes per state."
+        )
     if any(frame.isna().any().any() for frame in (train_X, train_Z, test_X, test_Y)):
         raise ValueError("The supplied data contain missing values.")
 
@@ -136,11 +140,11 @@ def run_experiment(
     if not nn_hidden_layers or any(width < 1 for width in nn_hidden_layers):
         raise ValueError("NN_HIDDEN_LAYERS must contain positive layer widths.")
     if not 1 <= gp_training_size <= len(data.X_train):
-        raise ValueError(
-            f"GP_TRAINING_SIZE must be between 1 and {len(data.X_train)}."
-        )
+        raise ValueError(f"GP_TRAINING_SIZE must be between 1 and {len(data.X_train)}.")
     if gp_training_size > 2_500:
-        print("Warning: a standard GP above 2,500 states may be slow and memory-intensive.")
+        print(
+            "Warning: a standard GP above 2,500 states may be slow and memory-intensive."
+        )
 
     predictions: dict[str, np.ndarray] = {}
     fit_times: dict[str, float] = {}
@@ -229,16 +233,20 @@ def run_experiment(
     predictions[gp_name] = y_center + y_scale * gp_model.predict(X_test_gp)
     details["fitted GP kernel"] = str(gp_model.kernel_)
 
-    results = pd.DataFrame(
-        [
-            {
-                "model": name,
-                "fit time (s)": fit_times[name],
-                **_metrics(data.y_test, prediction),
-            }
-            for name, prediction in predictions.items()
-        ]
-    ).set_index("model").sort_values("RMSE (€bn)")
+    results = (
+        pd.DataFrame(
+            [
+                {
+                    "model": name,
+                    "fit time (s)": fit_times[name],
+                    **_metrics(data.y_test, prediction),
+                }
+                for name, prediction in predictions.items()
+            ]
+        )
+        .set_index("model")
+        .sort_values("RMSE (€bn)")
+    )
 
     return Experiment(
         results=results,
@@ -251,11 +259,138 @@ def run_experiment(
 def experiment_details(experiment: Experiment) -> pd.DataFrame:
     """Show small pieces of fitted-model information without implementation noise."""
     return pd.DataFrame(
-        {"quantity": list(experiment.details), "value": list(experiment.details.values())}
+        {
+            "quantity": list(experiment.details),
+            "value": list(experiment.details.values()),
+        }
     )
 
 
-def plot_comparison(experiment: Experiment) -> None:
+class ProxyModelExplorer:
+    """Widget UI for comparing the three Lab 2 proxy models."""
+
+    def __init__(self, data: LabData):
+        self.data = data
+        self.latest_experiment: Experiment | None = None
+
+        self._nn_architecture = widgets.SelectionSlider(
+            options=[
+                ("one layer: 4", (4,)),
+                ("one layer: 8", (8,)),
+                ("one layer: 16", (16,)),
+                ("one layer: 32", (32,)),
+                ("one layer: 64", (64,)),
+                ("two layers: 64, 4", (64, 4)),
+                ("two layers: 64, 8", (64, 8)),
+                ("two layers: 64, 16", (64, 16)),
+                ("two layers: 64, 32", (64, 32)),
+            ],
+            value=(64,),
+            description="NN architecture:",
+            continuous_update=False,
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="470px"),
+        )
+        self._use_relu = widgets.Checkbox(
+            value=False,
+            description="Use ReLU activation (unchecked: tanh)",
+            indent=False,
+            style={"description_width": "initial"},
+        )
+        self._nn_regularization = widgets.FloatLogSlider(
+            value=1e-3,
+            base=10,
+            min=-5,
+            max=-1,
+            step=0.5,
+            description="NN regularization:",
+            continuous_update=False,
+            readout_format=".1e",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="470px"),
+        )
+        self._gp_training_size = widgets.SelectionSlider(
+            options=[400, 800, 1_200, 2_500],
+            value=400,
+            description="GP training states:",
+            continuous_update=False,
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="470px"),
+        )
+        self._optimize_gp_kernel = widgets.Checkbox(
+            value=True,
+            description="Optimize the GP kernel",
+            indent=False,
+            style={"description_width": "initial"},
+        )
+
+        self._run_button = widgets.Button(
+            description="Run comparison",
+            button_style="primary",
+            icon="play",
+        )
+        self._run_button.on_click(self._evaluate)
+        self.output = widgets.Output()
+
+        nn_controls = widgets.VBox(
+            [
+                widgets.HTML("<b>Neural network</b>"),
+                self._nn_architecture,
+                self._use_relu,
+                self._nn_regularization,
+            ],
+            layout=widgets.Layout(border="1px solid #dddddd", padding="8px"),
+        )
+        gp_controls = widgets.VBox(
+            [
+                widgets.HTML("<b>Gaussian process</b>"),
+                self._gp_training_size,
+                self._optimize_gp_kernel,
+            ],
+            layout=widgets.Layout(border="1px solid #dddddd", padding="8px"),
+        )
+        self.widget = widgets.VBox(
+            [nn_controls, gp_controls, self._run_button, self.output]
+        )
+
+        display(self.widget)
+
+    def _evaluate(self, _button=None) -> None:
+        self._run_button.disabled = True
+        self._run_button.description = "Fitting..."
+        self.output.outputs = ()
+
+        try:
+            experiment = run_experiment(
+                self.data,
+                nn_hidden_layers=self._nn_architecture.value,
+                nn_activation="relu" if self._use_relu.value else "tanh",
+                nn_regularization=self._nn_regularization.value,
+                gp_training_size=self._gp_training_size.value,
+                gp_optimize_kernel=self._optimize_gp_kernel.value,
+            )
+            self.latest_experiment = experiment
+            comparison_figure = plot_comparison(experiment, show=False)
+            predictions_figure = plot_predictions(experiment, show=False)
+
+            self.output.outputs = ()
+            self.output.append_display_data(experiment.results.round(4))
+            self.output.append_display_data(experiment_details(experiment))
+            self.output.append_display_data(comparison_figure)
+            self.output.append_display_data(predictions_figure)
+            plt.close(comparison_figure)
+            plt.close(predictions_figure)
+        finally:
+            self._run_button.disabled = False
+            self._run_button.description = "Run comparison"
+
+
+def experiment_explorer(data: LabData) -> ProxyModelExplorer:
+    """Display and return the Lab 2 proxy-model experiment controls."""
+    return ProxyModelExplorer(data)
+
+
+def plot_comparison(experiment: Experiment, show: bool = True) -> Figure:
     """Plot benchmark accuracy and model-fitting time."""
     plt.style.use("seaborn-v0_8-whitegrid")
     colors = ["#2F6B8A", "#6C9F73", "#D88C36"]
@@ -275,11 +410,13 @@ def plot_comparison(experiment: Experiment) -> None:
     axes[1].set_ylabel("")
     axes[1].set_title("Computational cost")
 
-    plt.tight_layout()
-    plt.show()
+    fig.tight_layout()
+    if show:
+        plt.show()
+    return fig
 
 
-def plot_predictions(experiment: Experiment) -> None:
+def plot_predictions(experiment: Experiment, show: bool = True) -> Figure:
     """Plot model predictions against benchmark conditional expectations."""
     lower = min(
         experiment.y_test.min(),
@@ -311,5 +448,7 @@ def plot_predictions(experiment: Experiment) -> None:
 
     axes[0].set_ylabel("Proxy prediction (€bn)")
     fig.suptitle("Predicted versus benchmark conditional expectations", y=1.02)
-    plt.tight_layout()
-    plt.show()
+    fig.tight_layout()
+    if show:
+        plt.show()
+    return fig

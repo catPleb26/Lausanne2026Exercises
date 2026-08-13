@@ -10,10 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 
+import ipywidgets as widgets
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import ipywidgets as widgets
 from IPython.display import clear_output, display
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -30,23 +30,32 @@ INTERACTION_CANDIDATES = (
     (
         "Degree 2",
         (
-            ("x × y", ("initial_x", "initial_y")),
             (
-                "PC1 × PC2",
+                "initial interest subprocess 1 × initial interest subprocess 2",
+                ("initial_x", "initial_y"),
+            ),
+            (
+                "yield curve level × yield curve slope",
                 ("yield_curve_pc1_risk_factor", "yield_curve_pc2_risk_factor"),
             ),
             (
-                "PC1 × PC3",
+                "yield curve level × yield curve curvature",
                 ("yield_curve_pc1_risk_factor", "yield_curve_pc3_risk_factor"),
             ),
             (
-                "PC2 × PC3",
+                "yield curve slope × yield curve curvature",
                 ("yield_curve_pc2_risk_factor", "yield_curve_pc3_risk_factor"),
             ),
-            ("x × PC1", ("initial_x", "yield_curve_pc1_risk_factor")),
-            ("y × PC1", ("initial_y", "yield_curve_pc1_risk_factor")),
             (
-                "PC1 × stock volatility",
+                "initial interest subprocess 1 × yield curve level",
+                ("initial_x", "yield_curve_pc1_risk_factor"),
+            ),
+            (
+                "initial interest subprocess 2 × yield curve level",
+                ("initial_y", "yield_curve_pc1_risk_factor"),
+            ),
+            (
+                "yield curve level × stock volatility",
                 ("yield_curve_pc1_risk_factor", "stock_vola_risk_factor"),
             ),
             (
@@ -67,7 +76,7 @@ INTERACTION_CANDIDATES = (
         "Degree 3",
         (
             (
-                "PC1 × PC2 × PC3",
+                "yield curve level × yield curve slope × yield curve curvature",
                 (
                     "yield_curve_pc1_risk_factor",
                     "yield_curve_pc2_risk_factor",
@@ -75,11 +84,11 @@ INTERACTION_CANDIDATES = (
                 ),
             ),
             (
-                "x × y × PC1",
+                "initial interest subprocess 1 × initial interest subprocess 2 × yield curve level",
                 ("initial_x", "initial_y", "yield_curve_pc1_risk_factor"),
             ),
             (
-                "PC1² × PC2",
+                "(yield curve level)² × yield curve slope",
                 (
                     "yield_curve_pc1_risk_factor",
                     "yield_curve_pc1_risk_factor",
@@ -87,7 +96,7 @@ INTERACTION_CANDIDATES = (
                 ),
             ),
             (
-                "PC1 × PC2²",
+                "yield curve level × (yield curve slope)²",
                 (
                     "yield_curve_pc1_risk_factor",
                     "yield_curve_pc2_risk_factor",
@@ -95,7 +104,7 @@ INTERACTION_CANDIDATES = (
                 ),
             ),
             (
-                "PC1² × stock volatility",
+                "(yield curve level)² × stock volatility",
                 (
                     "yield_curve_pc1_risk_factor",
                     "yield_curve_pc1_risk_factor",
@@ -251,8 +260,7 @@ def _regression_metrics(y_true: pd.Series, y_pred: np.ndarray) -> dict[str, floa
         "MAE (€bn)": mean_absolute_error(truth, prediction),
         "bias (€bn)": np.mean(prediction - truth),
         "R²": r2_score(truth, prediction),
-        "ΔSCR (€bn)": np.quantile(prediction, 0.995)
-        - np.quantile(truth, 0.995),
+        "ΔSCR (€bn)": np.quantile(prediction, 0.995) - np.quantile(truth, 0.995),
     }
 
 
@@ -263,14 +271,11 @@ def _bic_score(
 ) -> float:
     """Gaussian OLS BIC; lower values indicate a preferred specification."""
     residuals = np.asarray(y_train) - np.asarray(fitted_values)
-    residual_sum_squares = max(
-        float(residuals @ residuals), np.finfo(float).tiny
-    )
+    residual_sum_squares = max(float(residuals @ residuals), np.finfo(float).tiny)
     n_observations = len(residuals)
-    return (
-        n_observations * np.log(residual_sum_squares / n_observations)
-        + n_parameters * np.log(n_observations)
-    )
+    return n_observations * np.log(
+        residual_sum_squares / n_observations
+    ) + n_parameters * np.log(n_observations)
 
 
 def _selected_basis(
@@ -570,9 +575,7 @@ class ManualInteractionExplorer:
 
     def _selected_interactions(self) -> tuple[tuple[str, ...], ...]:
         return tuple(
-            factors
-            for factors, checkbox in self._checkboxes.items()
-            if checkbox.value
+            factors for factors, checkbox in self._checkboxes.items() if checkbox.value
         )
 
     def _clear(self, _button=None) -> None:
@@ -620,8 +623,7 @@ class ManualInteractionExplorer:
 
         selected_labels = [self._labels[factors] for factors in selected]
         best_r2_labels = [
-            self._labels[factors]
-            for factors in self.best_specification.interactions
+            self._labels[factors] for factors in self.best_specification.interactions
         ]
         best_bic_labels = [
             self._labels[factors]
@@ -701,9 +703,7 @@ def run_full_degree_comparison(
         )
 
     if specification.interactions:
-        display_name = (
-            f"best-R² hand-selected model ({len(specification.interactions)} interactions)"
-        )
+        display_name = f"best-R² hand-selected model ({len(specification.interactions)} interactions)"
     else:
         display_name = "best-R² manual model (no interactions)"
     results = experiment.results.rename(index={manual_name: display_name})
@@ -711,7 +711,9 @@ def run_full_degree_comparison(
         (display_name if name == manual_name else name): prediction
         for name, prediction in experiment.predictions.items()
     }
-    return Experiment(results=results, predictions=predictions, y_test=experiment.y_test)
+    return Experiment(
+        results=results, predictions=predictions, y_test=experiment.y_test
+    )
 
 
 def comparison_table(experiment: Experiment) -> pd.DataFrame:
@@ -728,9 +730,7 @@ def comparison_table(experiment: Experiment) -> pd.DataFrame:
     ].copy()
     table["ΔBIC"] = table["BIC (train)"] - table["BIC (train)"].min()
     selected_name = table["BIC (train)"].idxmin()
-    print(
-        f'BIC selects "{selected_name}"; lower BIC and ΔBIC are better.'
-    )
+    print(f'BIC selects "{selected_name}"; lower BIC and ΔBIC are better.')
     return table.round(4)
 
 
